@@ -1,0 +1,62 @@
+- hosts: localhost
+  vars_files:
+    - external_vars.yml
+  vars:
+    APP_NAME: "{{ API_NAME }}"
+    IMAGE_TAG: "{{ IMAGE_TAG }}"
+    IMAGE_NAME: "{{ IMAGE_NAME }}"
+    PROJECT_NAME: "{{ PROJECT_NAME }}"
+    OPENSHIFT_SERVER: "{{ OPENSHIFT_SERVER }}"
+    OPENSHIFT_TOKEN: "{{ OPENSHIFT_TOKEN }}"
+    CLOUD_TOKEN: "{{ CLOUD_TOKEN }}"
+    FOLDER_NAME: "{{ FOLDER_NAME }}"
+    IC_REG_URL: "{{ IC_REG_URL }}"
+    IC_REG_NAME: "{{ IC_REG_NAME }}"
+    DYNAMIC_PORT_UPDATEA_URL: "{{ DYNAMIC_PORT_UPDATEA_URL }}"
+    RUNID: "{{ RUNID }}"
+    IMPLEMENTATION_TYPE: "{{ IMPLEMENTATION_TYPE }}"
+    REMOTE_USER: "{{ REMOTE_USER }}"
+
+  remote_user: "{{ REMOTE_USER }}"
+
+  tasks:
+    - name: debug FOLDER_NAME
+      debug:
+        var: FOLDER_NAME
+    - name: debug DYNAMIC_PORT_UPDATEA_URL
+      debug:
+        var: DYNAMIC_PORT_UPDATEA_URL
+
+    - name: Docker Login
+      shell: 'docker login -u iamapikey -p {{ CLOUD_TOKEN }} {{ IC_REG_URL }}'
+      ignore_errors: True
+
+    - name: Image Pull from Container Registry
+      shell: 'docker pull {{ IMAGE_NAME }}:{{ IMAGE_TAG }}'
+      ignore_errors: True
+
+    - name: OpenShift CLI login
+      shell: 'oc login --token={{ OPENSHIFT_TOKEN }} --server= {{ OPENSHIFT_SERVER }} -n {{ PROJECT_NAME }}'
+      register: osclilogin
+      ignore_errors: True
+      
+    - name: Create and Run Deployment Config
+      shell: 'oc process -f deploymentConfigTemplate.yaml -p APP_NAME={{APP_NAME}} -p PROJECT_NAME={{ PROJECT_NAME }} -p IMAGE_STREAM_NAME={{IMAGE_NAME}} -p IMAGE_STREAM_TAG={{IMAGE_TAG}} | oc create -f -'
+      ignore_errors: True
+
+    - name: Create Service
+      shell: 'oc process -f servicesTemplate.yaml -p APP_NAME={{APP_NAME}} |  oc create -f -'
+      ignore_errors: True 
+
+    - name: Create Route
+      shell: 'oc process -f routeTemplate.yaml -p APP_NAME={{APP_NAME}} -p PROJECT_NAME={{PROJECT_NAME}} |  oc create -f -'
+      ignore_errors: True 
+    
+    - name: Get the Route and post to RunManagement
+      shell: 'oc get route {{ APP_NAME }} -o=jsonpath={.spec.host}'
+      register: routeName
+      ignore_errors: True 
+      
+    - name: routeName
+      debug:
+        var: routeName.stdout

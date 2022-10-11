@@ -1,0 +1,26 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ${APP_NAME}-template
+objects:
+- apiVersion: v1
+  kind: Service
+  metadata:
+    labels:
+      app: ${APP_NAME}
+      app.tool.name: DMB-DSB
+    name: ${APP_NAME}
+  spec:
+    ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    selector:
+      app: ${APP_NAME}
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+parameters:
+  - name: APP_NAME 
+    required: true 

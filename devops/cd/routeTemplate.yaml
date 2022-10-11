@@ -1,0 +1,33 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ${APP_NAME}-template
+objects:
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    labels:
+      app: ${APP_NAME}
+      app.tool.name: DMB-DSB
+    name: ${APP_NAME}
+  spec:
+    host:
+    path: / 
+    to:
+      kind: Service
+      name: ${APP_NAME}
+      weight: 100
+    port:
+      targetPort: http  
+    wildcardPolicy: None
+  status:
+    ingress:
+    - conditions:
+      host: 
+      routerName: router
+      wildcardPolicy: None
+parameters:
+  - name: APP_NAME 
+    required: true 
+  - name: PROJECT_NAME
+    required: true 

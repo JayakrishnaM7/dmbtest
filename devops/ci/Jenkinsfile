@@ -1,0 +1,130 @@
+def workspace;
+def props='';
+def branchName;
+def commit_username;
+def commit_Email;
+def imageName;
+def latestTag;
+def dockerRegistry;
+def JAVA_HOME = "/opt/tools/jdk-11.0.9.1";
+def MVN_HOME = "/opt/tools/apache-maven-3.6.3";
+
+node ('DockerIO-GM4C'){
+    stage('Checkout Code')
+    {
+        try
+        {
+            checkout scm
+            props = readProperties  file: """devops/deploy.properties"""
+            workspace = pwd ()
+            branchName=sh(returnStdout: true, script: 'git symbolic-ref --short HEAD').trim()
+            commit_username=sh(returnStdout: true, script: '''username=$(git log -1 --pretty=%ae)
+            echo ${username%@*} ''').trim();
+            commit_Email=sh(returnStdout: true, script: '''Email=$(git log -1 --pretty=%ae)
+            echo $Email''').trim();
+            echo commit_username
+            echo commit_Email
+        } catch (e) {
+            throwError("Checkout Code",e)
+        } catch (error) {
+            currentBuild.result='FAILURE'
+            echo "Error occurred in Checkout Code stage"
+            echo """${error.getMessage()}"""
+            throw error
+        }
+    }
+
+    stage ('Build') {
+        try	{
+            sh """
+            export JAVA_HOME=${JAVA_HOME}
+            export PATH=${MVN_HOME}/bin:${PATH}
+            mvn clean install"""
+        } catch (e) {
+            throwError("Build",e)
+        }
+    }
+
+    stage ('Unit Test Execution'){
+        try {
+            println "Unit Test Execution"
+            sh """
+            export JAVA_HOME=${JAVA_HOME}
+            export PATH=${MVN_HOME}/bin:${PATH}
+            mvn test"""
+        }catch (e) {
+            throwError("Unit Testing",e)
+        }
+    }
+				
+    stage('SonarQube Analysis') {
+        try {
+            def scannerHome = tool 'Sonar-Scanner';
+             withFolderProperties{
+                    def sonarUrl = """${env.sonarUrl}"""
+                    def sonarName = """${env.sonarName}"""
+                withSonarQubeEnv("""$sonarName"""){
+                    sh "${scannerHome}/bin/sonar-scanner " + 
+                    '-Dproject.settings=devops/ci/sonar-project.properties ' +
+                    '-Dsonar.sourceEncoding=UTF-8 ' +
+                    '-Dsonar.sources=src/main ' +
+                    '-Dsonar.java.binaries=target/classes ' +
+                    '-Dsonar.jacoco.reportPaths=target/jacoco.exec ' +
+                    '-Dsonar.tests=src/test '
+                }
+          }
+        }catch (e) {
+            throwError("Create Package", e)
+        }
+    }
+
+
+
+ stage('Create Docker Image') {
+        try {
+        withFolderProperties{
+                imageName = """${env.dockerRegistryUrl}/${env.dockerRegistry}/${props['deploy.app']}:${props['api.version']}"""
+                latestTag = """${env.dockerRegistryUrl}/${env.dockerRegistry}/${props['deploy.app']}:latest"""
+                sh """
+
+                                      export JAVA_HOME=${JAVA_HOME}
+export PATH=${MVN_HOME}/bin:${PATH}
+mvn package -DskipTests
+
+                    docker build -t ${imageName} -f devops/ci/Dockerfile .
+                    docker tag ${imageName} ${latestTag}
+                 """
+            }
+
+        }
+        catch (e) {
+            throwError("Create Package", e)
+        }
+    }
+
+stage('IBM CR Image Push') {
+        withCredentials([string(credentialsId: 'cr-token', variable: 'CLOUD_TOKEN')]){
+                        sh """
+                            echo $CLOUD_TOKEN
+                            docker login -u iamapikey -p $CLOUD_TOKEN us.icr.io
+                            echo "image push"
+                            docker push ${latestTag}
+                        """
+        }
+    }
+
+
+
+
+    
+
+
+
+}
+def throwError(String errMsg,e)
+{
+	currentBuild.result='FAILURE'
+	echo "Error occurred in ${errMsg} stage"
+	echo """${e.getMessage()}"""
+    throw e
+}

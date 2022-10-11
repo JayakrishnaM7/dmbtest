@@ -1,0 +1,28 @@
+apiVersion: v1
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ${APP_NAME}-template
+objects:
+- kind: ConfigMap
+  apiVersion: v1
+  metadata:
+    name: ${APP_NAME}
+    namespace: ${PROJECT_NAME}
+  data:
+    prometheus.yml: |-
+    
+      - job_name: ${APP_NAME}
+        metrics_path: '/actuator/prometheus'
+        scrape_interval: 5s
+        scheme: http  
+        static_configs:
+        - targets: ['${ROUTE_NAME}:80']
+
+parameters:
+  - name: APP_NAME 
+    required: true 
+  - name: PROJECT_NAME
+    required: true 
+  - name: ROUTE_NAME
+    required: true

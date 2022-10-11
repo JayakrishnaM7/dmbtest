@@ -1,0 +1,68 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ${APP_NAME}-template
+  namespace: ${PROJECT_NAME}
+objects:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    generation: 2
+    labels:
+      app: ${APP_NAME}
+      app.tool.name: DMB-DSB
+    name: ${APP_NAME}
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: ${APP_NAME}
+    template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8080"
+            prometheus.io/path: "/actuator/prometheus"
+        spec:
+          restartPolicy: Always
+          serviceAccountName: igm4c-sa
+          imagePullSecrets:
+            - name: default-us-icr-io
+          schedulerName: default-scheduler
+          terminationGracePeriodSeconds: 30
+          securityContext: {}
+          containers:
+            - name: ${APP_NAME}
+              image: ${IMAGE_STREAM_NAME}:${IMAGE_STREAM_TAG}
+              ports:
+                - containerPort: 8080
+                  protocol: TCP
+              resources:
+                limits:
+                  cpu: 250m
+                  memory: 1Gi
+                requests:
+                  cpu: 250m
+                  memory: 1Gi
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                runAsNonRoot: false
+          serviceAccount: igm4c-sa
+          dnsPolicy: ClusterFirst
+    strategy:
+       type: Recreate
+    revisionHistoryLimit: 10
+    progressDeadlineSeconds: 600
+parameters:
+  - name: APP_NAME 
+    required: true 
+  - name: PROJECT_NAME
+    required: true 
+  - name: IMAGE_STREAM_NAME 
+    required: true 
+  - name: IMAGE_STREAM_TAG
+    required: true 

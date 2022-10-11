@@ -1,0 +1,215 @@
+def  readconfigfile='', configserveruri='';
+def appDeployProcess;
+def props;
+def propsvault;
+
+node ('DockerIO-GM4C') {
+
+
+    stage('Pulling deployment details') {
+        
+            try {
+                checkout scm
+                props = readProperties file: """devops/deploy.properties"""
+                
+                //Overriding the properties if available in parameter for higher environments
+                props['configserveruri'] = "${configServerUrl}" ?: props['configserveruri']
+                echo "Using " + props['configserveruri'] + " Config server url."
+                props['deploy.defaultEnvironment'] = "${profile}" ?: props['deploy.defaultEnvironment']
+                echo "Using \"" + props['deploy.defaultEnvironment'] + "\" profile."
+                props['api.version'] = "${version}" ?: props['api.version']
+                echo "Using \"" + props['api.version'] + "\" docker version."
+
+                
+            }
+            catch (e) {
+                currentBuild.result = 'FAILURE'
+                sh """rm -rf  credential.properties vault.json"""
+                echo """${e.getMessage()}"""
+                throw e
+            }
+            catch (error) {
+                currentBuild.result = 'FAILURE'
+                sh """rm -rf  credential.properties vault.json"""
+                echo """${error.getMessage()}"""
+                throw error
+            }
+       
+    }
+
+
+     stage('Deploy to Openshift ansible') {
+        try {
+            println "Deployment tool selected is  -> " + 'ANSIBLE'
+            println " Node name " + """${NODE_NAME}"""
+            println " Node name " + """${BUILD_TAG}"""
+			withFolderProperties {
+                    IC_REG_URL = """${env.dockerRegistryUrl}"""
+                    IC_REG_NAME = """${env.dockerRegistry}"""
+                    IMAGE_NAME = """${env.dockerRegistryUrl}/${env.dockerRegistry}/${props['deploy.app']}"""
+				withCredentials([string(credentialsId: 'cr-token', variable: 'CLOUD_TOKEN'),
+							    string(credentialsId:'openshift-server', variable: 'OPENSHIFT_SERVER'),
+							    string(credentialsId:'gm4c-oc-token', variable: 'OPENSHIFT_TOKEN'),
+							    string(credentialsId:'openshift-project-name', variable:'OPENSHIFT_PROJECT_NAME')]) {
+
+                def tempFolderName = """${BUILD_TAG}"""
+                println " tempFolderName " + """${tempFolderName}"""
+				
+                    sh """
+                        echo --- > external_vars.yml
+  
+                        echo API_NAME: ${props['deploy.app']} >> external_vars.yml
+                        echo IMAGE_TAG: 'latest' >> external_vars.yml
+                        echo IMAGE_NAME: ${IMAGE_NAME} >> external_vars.yml
+                        echo CLOUD_TOKEN: ${CLOUD_TOKEN} >> external_vars.yml
+                        echo PORT_TO_DEPLOY_CONTAINER: ${props['app.port']} >> external_vars.yml
+                        echo FOLDER_NAME: ${tempFolderName} >> external_vars.yml
+                        echo RUNID: ${props['run.id']} >> external_vars.yml
+                        echo IMPLEMENTATION_TYPE: ${props['api.implementation.type']} >> external_vars.yml
+                        echo PORT_TO_DEPLOY_CONTAINER_MICRO: ${props['app.httpsport']} >> external_vars.yml
+                        echo OPENSHIFT_SERVER: ${OPENSHIFT_SERVER} >> external_vars.yml
+                        echo OPENSHIFT_TOKEN: ${OPENSHIFT_TOKEN} >> external_vars.yml
+                        echo IC_REG_URL: ${IC_REG_URL} >> external_vars.yml
+                        echo IC_REG_NAME: ${IC_REG_NAME} >> external_vars.yml
+                        echo PROJECT_NAME: ${OPENSHIFT_PROJECT_NAME} >> external_vars.yml
+                        echo REMOTE_USER: $USER >> external_vars.yml
+                    """
+						
+						sh """
+                            echo DYNAMIC_PORT_UPDATEA_URL: ${props['runManagementIP']} >> external_vars.yml
+                            mkdir -p ansibleDir
+                            cp devops/cd/inventory.py ansibleDir/inventory.py
+                            cp external_vars.yml ansibleDir/external_vars.yml
+                            cp devops/cd/openshift-playbook-template.yml ansibleDir/playbook.yml
+                            cp devops/cd/deploymentConfigTemplate.yaml ansibleDir/deploymentConfigTemplate.yaml
+                            cp devops/cd/imageStreamTemplate.yaml ansibleDir/imageStreamTemplate.yaml
+                            cp devops/cd/routeTemplate.yaml ansibleDir/routeTemplate.yaml
+                            cp devops/cd/servicesTemplate.yaml ansibleDir/servicesTemplate.yaml
+                            chmod 0777 ansibleDir/inventory.py
+                            ansible-playbook -i ansibleDir/inventory.py ansibleDir/playbook.yml
+                    """	
+                }
+            }
+        }
+         catch (e) {
+            currentBuild.result = 'FAILURE'
+            throw e
+        }  
+    } 
+
+
+    stage('Validate Microservice Deployment') {
+        try {
+			   env['APP_NAME'] = props['deploy.app']
+               openshift.withCluster() {                     
+               withCredentials([ string(credentialsId:'openshift-server', variable: 'OPENSHIFT_SERVER'),
+                                 string(credentialsId:'gm4c-oc-token', variable: 'OPENSHIFT_TOKEN'),
+                                 string(credentialsId:'openshift-project-name', variable:'OPENSHIFT_PROJECT_NAME')]){
+                    
+                    sh """
+                        oc login --token=${OPENSHIFT_TOKEN} --server=${OPENSHIFT_SERVER}
+                        oc project ${OPENSHIFT_PROJECT_NAME}
+                    """
+                    env['routeName'] = sh (
+                        script: 'oc get route ${APP_NAME} -o=jsonpath={.spec.host}',
+                        returnStdout: true
+                    )
+                    echo "route Name : ${routeName}"
+
+
+                   timeout(20) {
+                        waitUntil {
+                            echo "Url : http://${routeName}/actuator/health/liveness"
+                            def response = sh(script : 'curl --connect-timeout 10 --retry 10 --retry-delay 20 http://${routeName// /}/actuator/health/liveness | grep "\"UP\""', returnStatus: true)
+                            return (response == 0)
+                            }
+                   } 
+
+            }
+               
+        }
+                    }
+        catch (error) {
+            currentBuild.result = 'UNSTABLE'
+            echo """${error.getMessage()}"""
+            sh """rm -rf  credential.properties vault.json"""
+        }
+    }
+
+    stage('Prometheus Target post') {
+          try{
+               env['APP_NAME'] = props['deploy.app']
+               openshift.withCluster() {                     
+               withCredentials([string(credentialsId: 'cr-token', variable: 'CLOUD_TOKEN'),
+                                 string(credentialsId:'openshift-server', variable: 'OPENSHIFT_SERVER'),
+                                 string(credentialsId:'gm4c-oc-token', variable: 'OPENSHIFT_TOKEN'),
+                                 string(credentialsId:'openshift-project-name', variable:'OPENSHIFT_PROJECT_NAME')]){
+                    
+                    sh """
+                        oc login --token=${OPENSHIFT_TOKEN} --server=${OPENSHIFT_SERVER}
+                        oc project ${OPENSHIFT_PROJECT_NAME}
+                    """
+                    env['routeName'] = sh (
+                        script: 'echo `oc get route ${APP_NAME} -o=jsonpath={.spec.host}`',
+                        returnStdout: true
+                    )
+                    echo "route Name : ${routeName}"
+                   sh(
+                        script:'echo `oc process -f devops/cd/configMapTemplate.yaml -p APP_NAME=${APP_NAME} -p PROJECT_NAME=${OPENSHIFT_PROJECT_NAME} -p ROUTE_NAME=${routeName} | oc create -f -`'
+                    )
+
+                     sh """
+                        oc get cm prometheus-configmap -o jsonpath={.data.prometheus\\\\\\.yml} > configmap.yaml 
+                        oc get cm ${APP_NAME} -o jsonpath={.data.prometheus\\\\\\.yml} > app-prometheus.yaml                           
+                    """
+                    
+                    sh """
+                        cat configmap.yaml app-prometheus.yaml > merge.yaml
+                        oc create configmap prometheus-configmap --from-file=prometheus.yml=merge.yaml --dry-run -o yaml | oc apply -f -
+                        oc rollout restart deployment prometheus                    
+                    """    
+
+                    sh """ rm -rf  configmap.yaml app-prometheus.yaml merge.yaml """               
+                 } 
+            }        
+                      }
+	       catch (e) {
+	            currentBuild.result = 'FAILURE'
+	            echo """${e.getMessage()}"""
+	            throw e
+	        }
+    }
+
+    stage('grafana trigger') {
+        try {
+                    if (props['PostGrafana'] == 'true') {
+                def grafanajson = readJSON file: """devops/monitoring/grafanadashboard.json"""
+                def title_name = grafanajson.dashboard.title
+                def grafanaDashboardUpload = props['PostGrafana']
+                
+                withCredentials([string(credentialsId: 'grafana-server', variable: 'grafanaserver')]){
+                    def grafanaserver = """${env.grafanaserver}"""
+                
+                    withCredentials([string(credentialsId: 'grafana-key', variable: 'grafanakey')]) {
+                            
+                            sh '''sed -i 's/"9.109.190.137:30682"/"${routeName}"/g' devops/monitoring/grafanadashboard.json'''
+                            
+                            sh """  
+                                chmod +x devops/monitoring/postgrafanadashboard.sh
+                                ./devops/monitoring/postgrafanadashboard.sh "$grafanaserver" "$grafanakey" ${grafanaDashboardUpload} ${title_name}
+                            """
+                    }
+                }        
+            } else {
+                echo "Developer Dont Want to Push Json to Grafana"
+            }
+                     }
+        catch (e) {
+            currentBuild.result = 'FAILURE'
+            echo """${e.getMessage()}"""
+            throw e
+        }
+    }     
+
+
+}
